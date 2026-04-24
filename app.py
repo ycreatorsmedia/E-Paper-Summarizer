@@ -1,129 +1,75 @@
 import streamlit as st
 import google.generativeai as genai
-import os
-import markdown
-from xhtml2pdf import pisa
-from io import BytesIO
+import requests
 
 # --- Configuration ---
-# This safely pulls the key from Streamlit's secret vault!
+# Safely pull keys from Streamlit's secret vault!
 GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash') 
+NEWSDATA_API_KEY = st.secrets["NEWSDATA_API_KEY"]
 
-# --- Helper Function for PDF ---
-def create_pdf(md_text):
-    html_content = markdown.markdown(md_text)
-    styled_html = f"""
-    <html>
-    <head>
-    <style>
-        body {{ font-family: Helvetica, Arial, sans-serif; line-height: 1.6; color: #2c3e50; }}
-        h1, h2, h3 {{ color: #2980b9; border-bottom: 1px solid #bdc3c7; padding-bottom: 5px; }}
-        strong {{ color: #34495e; }}
-    </style>
-    </head>
-    <body>
-        {html_content}
-    </body>
-    </html>
-    """
-    pdf_buffer = BytesIO()
-    pisa.CreatePDF(BytesIO(styled_html.encode("utf-8")), dest=pdf_buffer)
-    return pdf_buffer.getvalue()
+genai.configure(api_key=GOOGLE_API_KEY)
+model = genai.GenerativeModel('gemini-2.0-flash') 
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="E-Paper Summarizer", page_icon="📰", layout="wide")
+st.set_page_config(page_title="AP Political Intelligence", page_icon="📡")
 
-st.title("📰 Daily E-Paper Political Summarizer")
-st.markdown("Upload multiple PDFs or Images of news clippings to generate a master summary.")
+st.title("📡 Andhra Pradesh Live Political Intelligence Hub")
+st.markdown("This tool delivers a unified, real-time view of all political activity and media coverage in one place.")
 
-# Sidebar for options
-st.sidebar.header("Settings")
-party_focus = st.sidebar.selectbox("Primary Focus Party:", ["TDP", "YSRCP", "Janasena", "General"])
-
-# NEW: File Uploader now accepts multiple files AND images!
-uploaded_files = st.file_uploader(
-    "Upload Newspaper PDFs or Images (Select multiple!)", 
-    type=["pdf", "png", "jpg", "jpeg"], 
-    accept_multiple_files=True
+# Dropdown for topic selection
+search_query = st.selectbox(
+    "Instantly track and analyze the latest narrative, sentiment, and coverage trends:", 
+    ["YSRCP", "TDP", "JSP", "BJP", "Overall"]
 )
 
-# Check if the list of uploaded files is not empty
-if uploaded_files:
-    st.info(f"Uploading {len(uploaded_files)} file(s) directly to Gemini's vision engine...")
-    
-    with st.spinner('Analyzing political content across all files... This may take a moment.'):
+if st.button("Scan the Web & Summarize", type="primary"):
+    with st.spinner("Scanning global news databases for the latest updates..."):
         
-        gemini_uploaded_files = []
-        temp_file_paths = []
+        # SMART SEARCH LOGIC: If they pick 'Overall', search for AP Politics generally.
+        api_query = "Andhra Pradesh politics" if search_query == "Overall" else search_query
+        
+        url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_API_KEY}&q={api_query}&country=in&language=en,te"
         
         try:
-            # 1. Loop through ALL uploaded files to save and upload them to Gemini
-            for file in uploaded_files:
-                temp_path = f"temp_{file.name}"
-                with open(temp_path, "wb") as f:
-                    f.write(file.getbuffer())
+            response = requests.get(url).json()
+            
+            if response.get("status") == "success":
+                articles = response.get("results", [])
                 
-                gemini_file = genai.upload_file(temp_path)
-                gemini_uploaded_files.append(gemini_file)
-                temp_file_paths.append(temp_path)
-            
-            # 2. Create the instructions
-            prompt = f"""
-            You are an expert political analyst. Read all the attached newspaper files/images.
-            Please summarize the combined content focusing on the {party_focus} party. 
-            
-            Structure your response EXACTLY like this:
-            ### 1. Development & Investments
-            (Summarize any news related to projects, governance, and welfare)
-            
-            ### 2. Leaders on Media (Press Meets & Statements)
-            (List which leaders spoke and the gist of their statements)
-            
-            ### 3. Attacking Points on Opposition
-            (Summarize the main political attacks, criticism, and allegations made)
-            """
-            
-            # 3. Generate the summary using ALL files + the prompt
-            request_content = gemini_uploaded_files + [prompt]
-            response = model.generate_content(request_content)
-            summary = response.text
-            
-            # Display Results on Screen
-            st.divider()
-            st.subheader(f"📊 Master Summary Report: Focus on {party_focus}")
-            st.markdown(summary)
-            
-            # 4. Generate Download Buttons
-            st.divider()
-            st.write("### Download Options")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.download_button(
-                    label="📄 Download Summary as TXT",
-                    data=summary,
-                    file_name=f"{party_focus}_master_summary.txt",
-                    mime="text/plain"
-                )
-            
-            with col2:
-                pdf_bytes = create_pdf(summary)
-                st.download_button(
-                    label="🗄️ Download Summary as PDF",
-                    data=pdf_bytes,
-                    file_name=f"{party_focus}_master_summary.pdf",
-                    mime="application/pdf"
-                )
+                if len(articles) == 0:
+                    st.warning(f"No recent news found for '{search_query}'. Try a different keyword.")
+                else:
+                    st.success(f"Found {len(articles)} recent articles! Sending to Gemini for analysis...")
+                    
+                    compiled_news = ""
+                    for article in articles:
+                        compiled_news += f"- Source: {article.get('source_id')}\n"
+                        compiled_news += f"  Title: {article.get('title')}\n"
+                        compiled_news += f"  Description: {article.get('description')}\n"
+                        compiled_news += f"  Published: {article.get('pubDate')}\n\n"
+                    
+                    prompt = f"""
+                    You are an expert political analyst. Read the following news snippets regarding '{search_query}'.
+                    
+                    Please provide a highly structured and professional summary of the major events, statements, and criticisms found in these snippets.
+                    Use clear headings and bullet points.
+                    
+                    Here is the raw news data from the API:
+                    {compiled_news}
+                    """
+                    
+                    gemini_response = model.generate_content(prompt)
+                    
+                    st.divider()
+                    st.subheader(f"📊 Live Summary for: {search_query}")
+                    st.markdown(gemini_response.text)
+                    
+                    with st.expander("Click to see the raw API data we fed to Gemini"):
+                        st.text(compiled_news)
+                        
+            else:
+                error_msg = response.get('message', 'Unknown API Error')
+                st.error(f"NewsData API Error: {error_msg}")
                 
         except Exception as e:
             st.error(f"An error occurred: {e}")
-            
-        finally:
-            # 5. Clean up ALL temporary files (runs even if there's an error)
-            for temp_path in temp_file_paths:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            for g_file in gemini_uploaded_files:
-                genai.delete_file(g_file.name)
